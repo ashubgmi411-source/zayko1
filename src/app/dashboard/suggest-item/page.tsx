@@ -2,7 +2,9 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { useRouter } from "next/navigation";
-import { getMySuggestions, submitSuggestion } from "@/services/itemSuggestionService";
+import { db } from "@/lib/firebase";
+import { collection, onSnapshot, query, where } from "firebase/firestore";
+import { submitSuggestion, updateSuggestion, deleteSuggestion } from "@/services/itemSuggestionService";
 import toast from "react-hot-toast";
 import Link from "next/link";
 
@@ -14,6 +16,7 @@ interface SuggestionLocal {
     expectedPrice?: number;
     totalRequests: number;
     status: "pending" | "approved" | "rejected";
+    requestedBy?: string[];
     createdAt: string;
 }
 
@@ -38,26 +41,45 @@ export default function SuggestItemPage() {
     const [expectedPrice, setExpectedPrice] = useState("");
     const [submitting, setSubmitting] = useState(false);
 
+    // Edit state
+    const [editId, setEditId] = useState<string | null>(null);
+    const [editName, setEditName] = useState("");
+    const [editCategory, setEditCategory] = useState("");
+    const [editDescription, setEditDescription] = useState("");
+    const [editPrice, setEditPrice] = useState("");
+    const [editSaving, setEditSaving] = useState(false);
+
     useEffect(() => {
         if (!loading && !user) router.push("/auth");
     }, [user, loading, router]);
 
-    const fetchSuggestions = useCallback(async () => {
-        const token = await getIdToken();
-        if (!token) return;
-        setSugLoading(true);
-        try {
-            const res = await getMySuggestions(token);
-            if (res.success) setSuggestions(res.suggestions as SuggestionLocal[]);
-        } catch {
-            toast.error("Failed to load suggestions");
-        }
-        setSugLoading(false);
-    }, [getIdToken]);
-
+    // Real-time suggestions via onSnapshot
     useEffect(() => {
-        if (user) fetchSuggestions();
-    }, [user, fetchSuggestions]);
+        if (!user) return;
+        setSugLoading(true);
+        const q = query(
+            collection(db, "itemSuggestions"),
+            where("requestedBy", "array-contains", user.uid)
+        );
+        const unsub = onSnapshot(
+            q,
+            (snap) => {
+                const items = snap.docs.map((d) => ({
+                    id: d.id,
+                    ...d.data(),
+                })) as SuggestionLocal[];
+                // Sort by createdAt descending in JS (avoids composite index)
+                items.sort((a: any, b: any) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+                setSuggestions(items);
+                setSugLoading(false);
+            },
+            (err) => {
+                console.error("[Suggestions] onSnapshot error:", err);
+                setSugLoading(false);
+            }
+        );
+        return () => unsub();
+    }, [user]);
 
     const handleSubmit = async () => {
         if (!itemName.trim() || itemName.trim().length < 2) {
@@ -88,7 +110,6 @@ export default function SuggestItemPage() {
                 setCategory("");
                 setDescription("");
                 setExpectedPrice("");
-                fetchSuggestions();
             } else if (res.alreadyRequested) {
                 toast.error("You already suggested this item");
             } else {
@@ -98,6 +119,62 @@ export default function SuggestItemPage() {
             toast.error("Something went wrong");
         }
         setSubmitting(false);
+    };
+
+    const startEdit = (s: SuggestionLocal) => {
+        setEditId(s.id);
+        setEditName(s.itemName);
+        setEditCategory(s.category || "");
+        setEditDescription(s.description || "");
+        setEditPrice(s.expectedPrice ? String(s.expectedPrice) : "");
+    };
+
+    const cancelEdit = () => {
+        setEditId(null);
+        setEditName("");
+        setEditCategory("");
+        setEditDescription("");
+        setEditPrice("");
+    };
+
+    const saveEdit = async () => {
+        if (!editId) return;
+        if (!editName.trim() || editName.trim().length < 2) return toast.error("Item name min 2 characters");
+
+        setEditSaving(true);
+        const token = await getIdToken();
+        if (!token) { setEditSaving(false); return; }
+
+        try {
+            const res = await updateSuggestion(token, editId, {
+                itemName: editName.trim(),
+                category: editCategory.trim() || undefined,
+                description: editDescription.trim() || undefined,
+                expectedPrice: editPrice && Number(editPrice) > 0 ? Number(editPrice) : undefined,
+            });
+            if (res.success) {
+                toast.success("Suggestion updated ✏️");
+                cancelEdit();
+            } else {
+                toast.error(res.error || "Failed to update");
+            }
+        } catch {
+            toast.error("Something went wrong");
+        }
+        setEditSaving(false);
+    };
+
+    const handleDelete = async (id: string) => {
+        if (!confirm("Delete this suggestion?")) return;
+        const token = await getIdToken();
+        if (!token) return;
+        try {
+            const res = await deleteSuggestion(token, id);
+            if (res.success) toast.success("Suggestion deleted 🗑️");
+            else toast.error(res.error || "Failed to delete");
+        } catch {
+            toast.error("Failed to delete");
+        }
     };
 
     if (loading) {
@@ -219,28 +296,74 @@ export default function SuggestItemPage() {
                         <div className="space-y-3">
                             {suggestions.map((s) => (
                                 <div key={s.id} className="bg-zayko-800/50 border border-zayko-700 rounded-2xl p-4 animate-slide-up">
-                                    <div className="flex items-center justify-between gap-3">
-                                        <div className="min-w-0 flex-1">
-                                            <div className="flex items-center gap-2 mb-1 flex-wrap">
-                                                <span className="font-bold text-white">{s.itemName}</span>
-                                                {s.category && (
-                                                    <span className="text-xs px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-400">
-                                                        {s.category}
-                                                    </span>
-                                                )}
-                                                <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${STATUS_STYLE[s.status]}`}>
-                                                    {STATUS_ICON[s.status]} {s.status.charAt(0).toUpperCase() + s.status.slice(1)}
-                                                </span>
+                                    {editId === s.id ? (
+                                        /* Edit Mode */
+                                        <div className="space-y-3">
+                                            <div>
+                                                <label className="text-xs text-zayko-400 block mb-1">Item Name</label>
+                                                <input type="text" value={editName} onChange={(e) => setEditName(e.target.value)}
+                                                    className="w-full px-3 py-2 rounded-lg bg-white/10 border border-white/10 text-white text-sm focus:outline-none focus:ring-2 focus:ring-gold-400" />
                                             </div>
-                                            {s.description && (
-                                                <p className="text-xs text-zayko-400 mt-0.5 line-clamp-1">{s.description}</p>
-                                            )}
-                                            <div className="flex items-center gap-3 mt-1.5 text-xs text-zayko-500">
-                                                <span>👥 {s.totalRequests} request{s.totalRequests !== 1 ? "s" : ""}</span>
-                                                {s.expectedPrice && <span>💰 ₹{s.expectedPrice}</span>}
+                                            <div className="grid grid-cols-2 gap-2">
+                                                <div>
+                                                    <label className="text-xs text-zayko-400 block mb-1">Category</label>
+                                                    <input type="text" value={editCategory} onChange={(e) => setEditCategory(e.target.value)}
+                                                        className="w-full px-3 py-2 rounded-lg bg-white/10 border border-white/10 text-white text-sm focus:outline-none focus:ring-2 focus:ring-gold-400" />
+                                                </div>
+                                                <div>
+                                                    <label className="text-xs text-zayko-400 block mb-1">Price</label>
+                                                    <input type="number" value={editPrice} onChange={(e) => setEditPrice(e.target.value)} min={0}
+                                                        className="w-full px-3 py-2 rounded-lg bg-white/10 border border-white/10 text-white text-sm focus:outline-none focus:ring-2 focus:ring-gold-400" />
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <label className="text-xs text-zayko-400 block mb-1">Description</label>
+                                                <textarea value={editDescription} onChange={(e) => setEditDescription(e.target.value)} rows={2}
+                                                    className="w-full px-3 py-2 rounded-lg bg-white/10 border border-white/10 text-white text-sm focus:outline-none focus:ring-2 focus:ring-gold-400 resize-none" />
+                                            </div>
+                                            <div className="flex gap-2 pt-1">
+                                                <button onClick={saveEdit} disabled={editSaving}
+                                                    className="flex-1 py-2 bg-emerald-500/20 text-emerald-400 rounded-xl text-sm font-bold hover:bg-emerald-500/30 transition-all">
+                                                    {editSaving ? "Saving…" : "Save ✓"}
+                                                </button>
+                                                <button onClick={cancelEdit}
+                                                    className="flex-1 py-2 bg-white/5 text-zayko-400 rounded-xl text-sm font-bold hover:bg-white/10 transition-all">
+                                                    Cancel
+                                                </button>
                                             </div>
                                         </div>
-                                    </div>
+                                    ) : (
+                                        /* View Mode */
+                                        <div className="flex items-center justify-between gap-3">
+                                            <div className="min-w-0 flex-1">
+                                                <div className="flex items-center gap-2 mb-1 flex-wrap">
+                                                    <span className="font-bold text-white">{s.itemName}</span>
+                                                    {s.category && (
+                                                        <span className="text-xs px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-400">
+                                                            {s.category}
+                                                        </span>
+                                                    )}
+                                                    <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${STATUS_STYLE[s.status]}`}>
+                                                        {STATUS_ICON[s.status]} {s.status.charAt(0).toUpperCase() + s.status.slice(1)}
+                                                    </span>
+                                                </div>
+                                                {s.description && (
+                                                    <p className="text-xs text-zayko-400 mt-0.5 line-clamp-1">{s.description}</p>
+                                                )}
+                                                <div className="flex items-center gap-3 mt-1.5 text-xs text-zayko-500">
+                                                    <span>👥 {s.totalRequests} request{s.totalRequests !== 1 ? "s" : ""}</span>
+                                                    {s.expectedPrice && <span>💰 ₹{s.expectedPrice}</span>}
+                                                </div>
+                                            </div>
+                                            {/* Edit/Delete buttons — only for pending suggestions */}
+                                            {s.status === "pending" && (
+                                                <div className="flex items-center gap-1.5 shrink-0">
+                                                    <button onClick={() => startEdit(s)} className="p-2 rounded-xl text-sm bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 transition-all" title="Edit">✏️</button>
+                                                    <button onClick={() => handleDelete(s.id)} className="p-2 rounded-xl text-sm bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-all" title="Delete">🗑️</button>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
                             ))}
                         </div>

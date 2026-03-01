@@ -31,3 +31,27 @@ export async function submitSuggestion(
     });
     return res.json();
 }
+
+export async function updateSuggestion(
+    token: string,
+    id: string,
+    data: { itemName?: string; category?: string; description?: string; expectedPrice?: number }
+): Promise<SuggestionResponse> {
+    const res = await fetch(`/api/item-suggestions?id=${id}`, {
+        method: "PATCH",
+        headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(data),
+    });
+    return res.json();
+}
+
+export async function deleteSuggestion(token: string, id: string): Promise<SuggestionResponse> {
+    const res = await fetch(`/api/item-suggestions?id=${id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+    });
+    return res.json();
+}

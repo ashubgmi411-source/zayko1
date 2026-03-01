@@ -1,7 +1,9 @@
 "use client";
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { useRouter } from "next/navigation";
+import { db } from "@/lib/firebase";
+import { collection, onSnapshot, query, where } from "firebase/firestore";
 import toast from "react-hot-toast";
 import Link from "next/link";
 
@@ -40,19 +42,33 @@ export default function UserFeedbackPage() {
         if (!loading && !user) router.push("/auth");
     }, [user, loading, router]);
 
-    const fetchFeedbacks = useCallback(async () => {
-        const token = await getIdToken();
-        if (!token) return;
+    // Real-time feedback via onSnapshot
+    useEffect(() => {
+        if (!user) return;
         setFetching(true);
-        try {
-            const res = await fetch("/api/user-feedback", { headers: { Authorization: `Bearer ${token}` } });
-            const json = await res.json();
-            if (json.success) setFeedbacks(json.feedbacks as FeedbackLocal[]);
-        } catch { toast.error("Failed to load"); }
-        setFetching(false);
-    }, [getIdToken]);
-
-    useEffect(() => { if (user) fetchFeedbacks(); }, [user, fetchFeedbacks]);
+        const q = query(
+            collection(db, "userFeedbacks"),
+            where("userId", "==", user.uid)
+        );
+        const unsub = onSnapshot(
+            q,
+            (snap) => {
+                const items = snap.docs.map((d) => ({
+                    id: d.id,
+                    ...d.data(),
+                })) as FeedbackLocal[];
+                // Sort by createdAt descending in JS (avoids composite index)
+                items.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+                setFeedbacks(items);
+                setFetching(false);
+            },
+            (err) => {
+                console.error("[UserFeedback] onSnapshot error:", err);
+                setFetching(false);
+            }
+        );
+        return () => unsub();
+    }, [user]);
 
     const handleSubmit = async () => {
         if (!rating) return toast.error("Select a rating");
@@ -73,7 +89,7 @@ export default function UserFeedbackPage() {
             if (json.success) {
                 toast.success("Feedback submitted! Thank you 🙏");
                 setRating(0); setCategory(""); setMessage("");
-                fetchFeedbacks();
+                // onSnapshot will handle the state update
             } else toast.error(json.error || "Failed");
         } catch { toast.error("Something went wrong"); }
         setSubmitting(false);
@@ -180,7 +196,7 @@ export default function UserFeedbackPage() {
                                                 {f.status === "reviewed" ? "✅ Reviewed" : "⏳ Pending"}
                                             </span>
                                         </div>
-                                        <span className="text-xs text-zayko-500">{new Date(f.createdAt).toLocaleDateString()}</span>
+                                        <span className="text-xs text-zayko-500">{f.createdAt ? new Date(f.createdAt).toLocaleDateString() : 'Just now'}</span>
                                     </div>
                                     <p className="text-sm text-zayko-300">{f.message}</p>
                                 </div>

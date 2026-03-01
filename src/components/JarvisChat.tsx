@@ -9,6 +9,30 @@ interface ChatMessage {
     role: "assistant" | "user" | "system";
     content: string;
     timestamp: number;
+    structured?: StructuredResponse | null;
+}
+
+interface OrderedItem {
+    name: string;
+    quantity: number;
+    unit_price: number;
+    total_price: number;
+    item_id: string;
+}
+
+interface StructuredResponse {
+    status: string;
+    items?: OrderedItem[];
+    grand_total?: number;
+    action?: string;
+    message?: string;
+    found_items?: OrderedItem[];
+    not_found_items?: string[];
+    item_name?: string;
+    requested?: number;
+    available?: number;
+    orderId?: string;
+    total?: number;
 }
 
 export default function JarvisChat() {
@@ -28,7 +52,7 @@ export default function JarvisChat() {
             setMessages([
                 {
                     role: "assistant",
-                    content: `Namaste ${firstName}! 🙏 Main hoon Jarvis, aapka personal Zayko AI Assistant.\n\nAap mujhse canteen ke baare mein kuch bhi pooch sakte hain Hinglish mein, jaise:\n• "Aaj menu mein kya hai?"\n• "Mera wallet balance kya hai?"\n• "1 tea aur 2 samosa order kar do."`,
+                    content: `Namaste ${firstName}! 🙏 Main hoon Jarvis — Zayko AI Ordering Engine.\n\nSeedha order bolo, jaise:\n• "6 milk"\n• "2 samosa aur 1 chai"\n• "3 coffee order karo"\n\nMain turant process karunga! ⚡`,
                     timestamp: Date.now(),
                 },
             ]);
@@ -47,12 +71,12 @@ export default function JarvisChat() {
         }
     }, [open]);
 
-    const handleSend = async (action?: string) => {
+    const handleSend = useCallback(async (action?: string, orderItems?: OrderedItem[]) => {
         const text = input.trim();
         if ((!text && !action) || processing) return;
 
-        const userMsg = text || (action === "confirm_order" ? "Confirm Order" : "");
-        if (userMsg) {
+        const userMsg = text || (action === "execute_order" ? "✅ Order Confirm" : action === "place_order" ? "Place Order" : "");
+        if (userMsg && action !== "execute_order") {
             setMessages(prev => [...prev, { role: "user", content: userMsg, timestamp: Date.now() }]);
         }
 
@@ -68,25 +92,65 @@ export default function JarvisChat() {
                     Authorization: `Bearer ${token}`,
                 },
                 body: JSON.stringify({
-                    messages: messages.concat(userMsg ? [{ role: "user", content: userMsg, timestamp: Date.now() }] : []),
-                    cart: items,
+                    messages: messages.concat(
+                        userMsg && action !== "execute_order"
+                            ? [{ role: "user" as const, content: userMsg, timestamp: Date.now() }]
+                            : []
+                    ),
+                    cart: action === "execute_order" ? orderItems : items,
                     userProfile: profile,
-                    action: action || "chat"
+                    action: action || "chat",
                 }),
             });
 
             const data = await res.json();
-            if (res.ok) {
-                setMessages(prev => [...prev, { role: "assistant", content: data.message, timestamp: Date.now() }]);
 
-                // If the AI confirms the order, we might need a special UI or action
-                if (data.action === "order_placed") {
-                    toast.success("Order placed via AI! 🎉");
-                    clearCart();
+            if (res.ok) {
+                // Determine if this is a structured response
+                const isStructured = data.status && ["ORDER_CONFIRMED", "ITEM_NOT_FOUND", "STOCK_ERROR", "ORDER_PLACED", "ORDER_FAILED", "CHAT_MODE"].includes(data.status);
+
+                if (isStructured) {
+                    const displayContent = buildStructuredDisplay(data);
+                    setMessages(prev => [
+                        ...prev,
+                        {
+                            role: "assistant",
+                            content: displayContent,
+                            timestamp: Date.now(),
+                            structured: data,
+                        },
+                    ]);
+
+                    if (data.status === "ORDER_PLACED" || data.action === "order_placed") {
+                        toast.success("Order placed! 🎉");
+                        clearCart();
+                    }
+                } else {
+                    // Legacy/chat response
+                    setMessages(prev => [
+                        ...prev,
+                        {
+                            role: "assistant",
+                            content: data.message,
+                            timestamp: Date.now(),
+                        },
+                    ]);
+
+                    if (data.action === "order_placed") {
+                        toast.success("Order placed via AI! 🎉");
+                        clearCart();
+                    }
                 }
             } else {
                 toast.error(data.error || "AI is taking a break...");
-                setMessages(prev => [...prev, { role: "assistant", content: "Sorry, server side kuch issue hai. Kripya bad mein try karein! 🙏", timestamp: Date.now() }]);
+                setMessages(prev => [
+                    ...prev,
+                    {
+                        role: "assistant",
+                        content: "Sorry, server side kuch issue hai. Kripya bad mein try karein! 🙏",
+                        timestamp: Date.now(),
+                    },
+                ]);
             }
         } catch (err) {
             console.error("Jarvis Error:", err);
@@ -94,7 +158,40 @@ export default function JarvisChat() {
         } finally {
             setProcessing(false);
         }
-    };
+    }, [input, processing, messages, items, profile, getIdToken, clearCart]);
+
+    /** Build a human-readable display string from structured JSON */
+    function buildStructuredDisplay(data: StructuredResponse): string {
+        switch (data.status) {
+            case "ORDER_CONFIRMED": {
+                const lines = ["🛒 **Order Summary**\n"];
+                for (const item of data.items || []) {
+                    lines.push(`• ${item.name} × ${item.quantity} — ₹${item.total_price}`);
+                }
+                lines.push(`\n💰 Grand Total: ₹${data.grand_total}`);
+                lines.push("\nConfirm karna hai? 👇");
+                return lines.join("\n");
+            }
+            case "ITEM_NOT_FOUND":
+                return `⚠️ ${data.message}`;
+            case "STOCK_ERROR":
+                return `📦 ${data.message}`;
+            case "ORDER_PLACED":
+                return data.message || "✅ Order placed!";
+            case "ORDER_FAILED":
+                return data.message || "❌ Order failed!";
+            default:
+                return data.message || "...";
+        }
+    }
+
+    const handleConfirmOrder = useCallback(
+        (structured: StructuredResponse) => {
+            if (!structured.items || structured.items.length === 0) return;
+            handleSend("execute_order", structured.items);
+        },
+        [handleSend]
+    );
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === "Enter" && !e.shiftKey) {
@@ -127,7 +224,7 @@ export default function JarvisChat() {
                         🤖
                     </motion.span>
                 )}
-                {/* Notification Badge if needed */}
+                {/* Notification Badge */}
                 <div className="absolute -top-1 -right-1 w-4 h-4 bg-emerald-500 rounded-full border-2 border-zayko-900 animate-pulse"></div>
             </motion.button>
 
@@ -150,8 +247,8 @@ export default function JarvisChat() {
                                     <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-500 border-2 border-zayko-900 rounded-full"></span>
                                 </div>
                                 <div>
-                                    <h3 className="font-display font-black text-white text-base tracking-tight italic">JARVIS <span className="text-[10px] bg-gold-400/20 text-gold-400 px-1.5 py-0.5 rounded ml-1 not-italic">AI</span></h3>
-                                    <p className="text-[10px] text-emerald-400 font-bold uppercase tracking-widest leading-none mt-1">Ready to assist</p>
+                                    <h3 className="font-display font-black text-white text-base tracking-tight italic">JARVIS <span className="text-[10px] bg-gold-400/20 text-gold-400 px-1.5 py-0.5 rounded ml-1 not-italic">ENGINE</span></h3>
+                                    <p className="text-[10px] text-emerald-400 font-bold uppercase tracking-widest leading-none mt-1">Order Engine Active</p>
                                 </div>
                             </div>
                             <button onClick={() => setOpen(false)} className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center text-zayko-400 hover:text-white transition-colors">✕</button>
@@ -166,13 +263,45 @@ export default function JarvisChat() {
                                     animate={{ opacity: 1, x: 0 }}
                                     className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
                                 >
-                                    <div className={`max-w-[85%] px-4 py-3 rounded-2xl text-[13px] leading-relaxed shadow-sm ${msg.role === "user"
+                                    <div className="max-w-[85%]">
+                                        <div className={`px-4 py-3 rounded-2xl text-[13px] leading-relaxed shadow-sm ${msg.role === "user"
                                             ? "bg-gold-500 text-zayko-950 font-bold rounded-tr-sm"
-                                            : "bg-white/5 border border-white/[0.08] text-zayko-100 rounded-tl-sm"
-                                        }`}>
-                                        {msg.content.split("\n").map((line, idx) => (
-                                            <p key={idx} className={idx > 0 ? "mt-1" : ""}>{line}</p>
-                                        ))}
+                                            : msg.structured?.status === "ORDER_CONFIRMED"
+                                                ? "bg-emerald-500/10 border border-emerald-500/30 text-zayko-100 rounded-tl-sm"
+                                                : msg.structured?.status === "ITEM_NOT_FOUND" || msg.structured?.status === "STOCK_ERROR"
+                                                    ? "bg-red-500/10 border border-red-500/30 text-zayko-100 rounded-tl-sm"
+                                                    : msg.structured?.status === "ORDER_PLACED"
+                                                        ? "bg-emerald-500/10 border border-emerald-500/30 text-zayko-100 rounded-tl-sm"
+                                                        : "bg-white/5 border border-white/[0.08] text-zayko-100 rounded-tl-sm"
+                                            }`}>
+                                            {msg.content.split("\n").map((line, idx) => (
+                                                <p key={idx} className={idx > 0 ? "mt-1" : ""}>{line}</p>
+                                            ))}
+                                        </div>
+
+                                        {/* Confirm / Cancel buttons for ORDER_CONFIRMED */}
+                                        {msg.structured?.status === "ORDER_CONFIRMED" && (
+                                            <div className="flex gap-2 mt-2">
+                                                <button
+                                                    onClick={() => handleConfirmOrder(msg.structured!)}
+                                                    disabled={processing}
+                                                    className="flex-1 py-2.5 rounded-xl bg-emerald-500 text-white text-xs font-black uppercase tracking-wider hover:bg-emerald-400 active:scale-95 transition-all disabled:opacity-50"
+                                                >
+                                                    ✅ Confirm Order
+                                                </button>
+                                                <button
+                                                    onClick={() =>
+                                                        setMessages(prev => [
+                                                            ...prev,
+                                                            { role: "assistant", content: "Order cancel kar diya. Kuch aur chahiye? 😊", timestamp: Date.now() },
+                                                        ])
+                                                    }
+                                                    className="flex-1 py-2.5 rounded-xl bg-white/5 border border-white/10 text-zayko-300 text-xs font-bold uppercase tracking-wider hover:bg-white/10 active:scale-95 transition-all"
+                                                >
+                                                    ❌ Cancel
+                                                </button>
+                                            </div>
+                                        )}
                                     </div>
                                 </motion.div>
                             ))}
@@ -199,7 +328,7 @@ export default function JarvisChat() {
                                     value={input}
                                     onChange={(e) => setInput(e.target.value)}
                                     onKeyDown={handleKeyDown}
-                                    placeholder="Order 2 masala dosa..."
+                                    placeholder="2 samosa aur 1 chai..."
                                     className="w-full bg-white/5 border border-white/[0.1] rounded-2xl py-4 pl-5 pr-14 text-white text-sm focus:outline-none focus:ring-2 focus:ring-gold-400/30 transition-all placeholder:text-zayko-600 font-medium"
                                     disabled={processing}
                                 />
@@ -213,7 +342,7 @@ export default function JarvisChat() {
                                     </svg>
                                 </button>
                             </div>
-                            <p className="text-[9px] text-center text-zayko-600 mt-3 font-black uppercase tracking-[0.2em]">Powered by Zayko AI Core</p>
+                            <p className="text-[9px] text-center text-zayko-600 mt-3 font-black uppercase tracking-[0.2em]">Powered by Zayko AI Engine</p>
                         </div>
                     </motion.div>
                 )}

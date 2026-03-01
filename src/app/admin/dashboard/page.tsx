@@ -22,6 +22,14 @@ interface Stats {
     topStudent: { name: string; totalSpent: number } | null;
 }
 
+interface CustomRevenue {
+    grossRevenue: number;
+    totalOrders: number;
+    refunds: number;
+    netRevenue: number;
+    walletTopups: number;
+}
+
 const CHART_COLORS = ["#1e3a5f", "#d4a017", "#0d9488", "#60a5fa", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899"];
 
 export default function AdminDashboard() {
@@ -29,6 +37,12 @@ export default function AdminDashboard() {
     const [loading, setLoading] = useState(true);
     const [canteenOpen, setCanteenOpen] = useState(true);
     const [toggling, setToggling] = useState(false);
+
+    // Custom Revenue Filter State
+    const [startDate, setStartDate] = useState("");
+    const [endDate, setEndDate] = useState("");
+    const [customRevenue, setCustomRevenue] = useState<CustomRevenue | null>(null);
+    const [loadingRevenue, setLoadingRevenue] = useState(false);
 
     const getHeaders = () => {
         const token = localStorage.getItem("adminToken");
@@ -86,6 +100,54 @@ export default function AdminDashboard() {
             console.error("Failed to fetch stats:", err);
         }
         setLoading(false);
+    };
+
+    const fetchCustomRevenue = async () => {
+        if (!startDate || !endDate) {
+            toast.error("Please select both Start and End Dates");
+            return;
+        }
+        setLoadingRevenue(true);
+        try {
+            const token = localStorage.getItem("adminToken");
+            const res = await fetch(`/api/admin/revenue?startDate=${startDate}&endDate=${endDate}`, {
+                headers: { Authorization: `Bearer ${token}` },
+            });
+            const json = await res.json();
+            if (json.success) {
+                setCustomRevenue(json.data);
+                toast.success("Revenue Calculated!");
+            } else {
+                toast.error(json.error || "Failed to calculate revenue");
+            }
+        } catch (err) {
+            toast.error("Error calculating revenue");
+        }
+        setLoadingRevenue(false);
+    };
+
+    const setQuickFilter = (days: number) => {
+        const end = new Date();
+        const start = new Date();
+
+        if (days === 0) { // Today
+            start.setHours(0, 0, 0, 0);
+        } else if (days === 1) { // Yesterday
+            start.setDate(start.getDate() - 1);
+            start.setHours(0, 0, 0, 0);
+            end.setDate(end.getDate() - 1);
+            end.setHours(23, 59, 59, 999);
+        } else if (days === 7) { // This Week (Last 7 days)
+            start.setDate(start.getDate() - 7);
+            start.setHours(0, 0, 0, 0);
+        } else if (days === 30) { // This Month (Last 30 days)
+            start.setDate(start.getDate() - 30);
+            start.setHours(0, 0, 0, 0);
+        }
+
+        // Format to YYYY-MM-DD for input fields
+        setStartDate(start.toISOString().split('T')[0]);
+        setEndDate(end.toISOString().split('T')[0]);
     };
 
     const adminLinks = [
@@ -191,10 +253,92 @@ export default function AdminDashboard() {
                                 <div className="bg-zayko-800/50 border border-zayko-700 rounded-2xl p-5">
                                     <div className="flex items-center gap-2 mb-2">
                                         <span className="text-lg">📊</span>
-                                        <span className="text-xs text-zayko-400">Avg Order Value</span>
+                                        <span className="text-xs text-zayko-400">Avg Order Value (30 Days)</span>
                                     </div>
                                     <p className="text-2xl font-display font-bold text-purple-400">₹{stats.summary.averageOrderValue}</p>
                                 </div>
+                            </div>
+
+                            {/* ─── Custom Date Revenue Filter ─── */}
+                            <div className="bg-zayko-800/80 border border-zayko-700 rounded-3xl p-6 mb-8 lg:mb-12 shadow-xl shadow-black/20 animate-slide-up">
+                                <div className="flex items-center gap-3 mb-6">
+                                    <div className="w-10 h-10 rounded-xl bg-gold-500/20 flex items-center justify-center text-xl">📅</div>
+                                    <div>
+                                        <h2 className="text-lg font-display font-bold text-white tracking-tight">Custom Revenue Analysis</h2>
+                                        <p className="text-xs text-zayko-400">Calculate net revenue, refunds, and top-ups between specific dates</p>
+                                    </div>
+                                </div>
+
+                                <div className="flex flex-col lg:flex-row items-end gap-4 mb-6">
+                                    <div className="w-full lg:w-auto flex-1">
+                                        <label className="text-xs text-zayko-400 mb-1 block">Start Date</label>
+                                        <input
+                                            type="date"
+                                            value={startDate}
+                                            onChange={(e) => setStartDate(e.target.value)}
+                                            className="w-full bg-zayko-900 border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-gold-500 transition-colors"
+                                        />
+                                    </div>
+                                    <div className="w-full lg:w-auto flex-1">
+                                        <label className="text-xs text-zayko-400 mb-1 block">End Date</label>
+                                        <input
+                                            type="date"
+                                            value={endDate}
+                                            onChange={(e) => setEndDate(e.target.value)}
+                                            className="w-full bg-zayko-900 border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-gold-500 transition-colors"
+                                        />
+                                    </div>
+                                    <button
+                                        onClick={fetchCustomRevenue}
+                                        disabled={loadingRevenue || !startDate || !endDate}
+                                        className="w-full lg:w-auto btn-gold py-3 px-8 flex items-center justify-center gap-2 disabled:opacity-50"
+                                    >
+                                        {loadingRevenue ? <div className="w-5 h-5 border-2 border-zayko-900 border-t-transparent rounded-full animate-spin"></div> : "Calculate 🚀"}
+                                    </button>
+                                </div>
+
+                                <div className="flex flex-wrap items-center gap-2 mb-6 p-4 rounded-xl bg-zayko-900/50 border border-white/5">
+                                    <span className="text-xs text-zayko-400 mr-2">Quick Filters:</span>
+                                    {[
+                                        { label: "Today", days: 0 },
+                                        { label: "Yesterday", days: 1 },
+                                        { label: "This Week", days: 7 },
+                                        { label: "This Month", days: 30 }
+                                    ].map((f) => (
+                                        <button
+                                            key={f.label}
+                                            onClick={() => { setQuickFilter(f.days); setTimeout(fetchCustomRevenue, 100); }}
+                                            className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/5 text-zayko-300 hover:bg-white/10 hover:text-white transition-all border border-white/5"
+                                        >
+                                            {f.label}
+                                        </button>
+                                    ))}
+                                </div>
+
+                                {customRevenue && (
+                                    <div className="grid grid-cols-2 md:grid-cols-5 gap-4 pt-4 border-t border-white/10 animate-fade-in">
+                                        <div className="bg-zayko-900 rounded-2xl p-4 border border-white/5">
+                                            <p className="text-xs text-zayko-400 mb-1">Gross Revenue</p>
+                                            <p className="text-xl font-display font-bold text-blue-400">₹{customRevenue.grossRevenue.toLocaleString()}</p>
+                                        </div>
+                                        <div className="bg-zayko-900 rounded-2xl p-4 border border-white/5 mt-0 md:mt-0">
+                                            <p className="text-xs text-zayko-400 mb-1 flex items-center gap-1">Refunds <span className="text-[10px] bg-red-500/20 text-red-400 px-1 rounded">-</span></p>
+                                            <p className="text-xl font-display font-bold text-red-400">₹{customRevenue.refunds.toLocaleString()}</p>
+                                        </div>
+                                        <div className="bg-zayko-900 rounded-2xl p-4 border border-gold-500/20 shadow-lg shadow-gold-500/5">
+                                            <p className="text-xs text-zayko-400 mb-1 flex items-center gap-1">Net Revenue <span className="text-[10px] bg-emerald-500/20 text-emerald-400 px-1 rounded">=</span></p>
+                                            <p className="text-xl font-display font-bold text-gold-400">₹{customRevenue.netRevenue.toLocaleString()}</p>
+                                        </div>
+                                        <div className="bg-zayko-900 rounded-2xl p-4 border border-white/5">
+                                            <p className="text-xs text-zayko-400 mb-1">Wallet Top-ups</p>
+                                            <p className="text-xl font-display font-bold text-purple-400">₹{customRevenue.walletTopups.toLocaleString()}</p>
+                                        </div>
+                                        <div className="col-span-2 md:col-span-1 bg-zayko-900 rounded-2xl p-4 border border-white/5 flex flex-col justify-center items-center">
+                                            <div className="text-3xl text-emerald-400 mb-1">📦</div>
+                                            <p className="text-sm font-bold text-white">{customRevenue.totalOrders} Orders</p>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
 
                             {/* Charts Grid */}

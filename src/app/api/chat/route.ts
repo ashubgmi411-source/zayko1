@@ -14,6 +14,7 @@ import { checkRateLimit } from "@/lib/rate-limit";
 import { adminDb } from "@/lib/firebase-admin";
 import { generateOrderId } from "@/lib/orderIdUtils";
 import { FieldValue } from "firebase-admin/firestore";
+import { detectOrderIntent, processOrder, MenuItemForEngine } from "@/lib/order-engine";
 
 export const runtime = "nodejs";
 
@@ -281,14 +282,131 @@ Keep it concise and fun with emojis!`;
             });
         }
 
-        // Regular chat flow
+        // ── ORDER ENGINE: execute_order action (user confirmed an order) ──
+        if (action === "execute_order" && cart && cart.length > 0 && userProfile) {
+            const orderId = generateId();
+            const total = cart.reduce(
+                (sum: number, item: { unit_price: number; quantity: number }) =>
+                    sum + item.unit_price * item.quantity,
+                0
+            );
+
+            try {
+                await adminDb.runTransaction(async (transaction) => {
+                    // 1. ALL READS FIRST
+                    const userRef = adminDb.collection("users").doc(uid);
+                    const userSnap = await transaction.get(userRef);
+                    if (!userSnap.exists) throw new Error("User not found");
+
+                    const walletBalance = userSnap.data()?.walletBalance || 0;
+                    if (walletBalance < total)
+                        throw new Error("Insufficient wallet balance");
+
+                    // Read stock for all items
+                    const itemData: Array<{ ref: any; snap: any; item: any }> = [];
+                    for (const item of cart) {
+                        if (item.item_id) {
+                            const itemRef = adminDb.collection("menuItems").doc(item.item_id);
+                            const itemSnap = await transaction.get(itemRef);
+                            itemData.push({ ref: itemRef, snap: itemSnap, item });
+                        }
+                    }
+
+                    // 2. ALL VALIDATION & WRITES
+                    for (const { snap, item, ref } of itemData) {
+                        if (!snap.exists) throw new Error(`Menu item "${item.name}" not found`);
+                        const currentQty = snap.data()?.quantity || 0;
+                        if (currentQty < item.quantity)
+                            throw new Error(`"${item.name}" out of stock (only ${currentQty} left)`);
+
+                        // Queue update
+                        transaction.update(ref, {
+                            quantity: FieldValue.increment(-item.quantity),
+                        });
+                    }
+
+                    // Deduct wallet
+                    transaction.update(userRef, {
+                        walletBalance: FieldValue.increment(-total),
+                    });
+
+                    // Create order
+                    const orderRef = adminDb.collection("orders").doc();
+                    transaction.set(orderRef, {
+                        orderId,
+                        userId: uid,
+                        userName: userProfile.name,
+                        userEmail: userProfile.email,
+                        userPhone: userSnap.data()?.phone || "",
+                        items: cart.map((c: { name: string; quantity: number; unit_price: number }) => ({
+                            name: c.name,
+                            quantity: c.quantity,
+                            price: c.unit_price,
+                        })),
+                        total,
+                        status: "pending",
+                        createdAt: new Date().toISOString(),
+                    });
+
+                    // Record wallet transaction
+                    const txnRef = adminDb.collection("walletTransactions").doc();
+                    transaction.set(txnRef, {
+                        userId: uid,
+                        type: "debit",
+                        amount: total,
+                        description: `Order #${orderId}`,
+                        createdAt: new Date().toISOString(),
+                    });
+                });
+
+                return NextResponse.json({
+                    status: "ORDER_PLACED",
+                    message: `✅ Order placed successfully! 🎉\n\n🆔 Order ID: #${orderId}\n💰 ₹${total} deducted from wallet.\n\nAapka order prepare ho raha hai! 🍽️`,
+                    orderId,
+                    total,
+                    action: "order_placed",
+                });
+            } catch (err: unknown) {
+                const message = err instanceof Error ? err.message : "Unknown error";
+                return NextResponse.json({
+                    status: "ORDER_FAILED",
+                    message: `❌ Order failed: ${message}`,
+                });
+            }
+        }
+
+        // ── ORDER ENGINE: Detect order intent and process ──
         const chatMessages: ChatMessage[] = (messages || []).map((m: { role: string; content: string }) => ({
             role: m.role as "user" | "assistant",
             content: m.content,
         }));
 
-        // ── FAQ check: match the last user message against static FAQs ──
         const lastUserMsg = chatMessages.filter((m) => m.role === "user").pop();
+
+        if (lastUserMsg) {
+            // Fetch live menu for order engine
+            try {
+                const menuSnap = await adminDb.collection("menuItems").get();
+                const liveMenu: MenuItemForEngine[] = menuSnap.docs.map((doc) => ({
+                    id: doc.id,
+                    name: doc.data().name || "",
+                    price: doc.data().price || 0,
+                    available: doc.data().available !== false,
+                    quantity: doc.data().quantity || 0,
+                }));
+
+                if (detectOrderIntent(lastUserMsg.content, liveMenu)) {
+                    const result = processOrder(lastUserMsg.content, liveMenu);
+                    if (result.status !== "CHAT_MODE") {
+                        return NextResponse.json(result);
+                    }
+                }
+            } catch (menuErr) {
+                console.error("Order engine menu fetch error:", menuErr);
+            }
+        }
+
+        // ── FAQ check: match the last user message against static FAQs ──
         if (lastUserMsg) {
             const { matchFaq } = await import("@/lib/faq");
             const faqResult = matchFaq(lastUserMsg.content);
@@ -367,12 +485,38 @@ Keep it concise and fun with emojis!`;
 
             try {
                 await adminDb.runTransaction(async (transaction) => {
+                    // 1. ALL READS FIRST
                     const userRef = adminDb.collection("users").doc(uid);
                     const userSnap = await transaction.get(userRef);
                     if (!userSnap.exists) throw new Error("User not found");
 
                     const walletBalance = userSnap.data()?.walletBalance || 0;
                     if (walletBalance < total) throw new Error("Insufficient wallet balance");
+
+                    // Read stock for all items
+                    const itemDataStore: Array<{ ref: any; snap: any; item: any }> = [];
+                    for (const item of cart) {
+                        // In confirm_order, the cart items might have 'id' instead of 'item_id'
+                        const itemId = item.item_id || item.id;
+                        if (itemId) {
+                            const itemRef = adminDb.collection("menuItems").doc(itemId);
+                            const itemSnap = await transaction.get(itemRef);
+                            itemDataStore.push({ ref: itemRef, snap: itemSnap, item });
+                        }
+                    }
+
+                    // 2. ALL VALIDATION & WRITES
+                    for (const { snap, item, ref } of itemDataStore) {
+                        if (!snap.exists) throw new Error(`Menu item "${item.name}" no longer exists`);
+                        const currentQty = snap.data()?.quantity || 0;
+                        if (currentQty < item.quantity) {
+                            throw new Error(`"${item.name}" out of stock (only ${currentQty} left)`);
+                        }
+                        transaction.update(ref, {
+                            quantity: FieldValue.increment(-item.quantity),
+                            updatedAt: new Date().toISOString()
+                        });
+                    }
 
                     // Deduct wallet
                     transaction.update(userRef, { walletBalance: FieldValue.increment(-total) });
@@ -385,7 +529,11 @@ Keep it concise and fun with emojis!`;
                         userName: userProfile.name,
                         userEmail: userProfile.email,
                         userPhone: userSnap.data()?.phone || "",
-                        items: cart,
+                        items: cart.map((c: any) => ({
+                            name: c.name,
+                            quantity: c.quantity,
+                            price: c.price || c.unit_price,
+                        })),
                         total,
                         status: "pending",
                         createdAt: new Date().toISOString(),

@@ -90,6 +90,29 @@ service cloud.firestore {
       allow read: if request.auth != null && resource.data.userId == request.auth.uid;
       allow write: if false; // Server-side only via Admin SDK
     }
+    // ─── Daily Demands ────────────────────────────
+    // Read: only the authenticated user can read their own demands
+    // Write: DENY — managed via /api/daily-demands (Admin SDK)
+    match /dailyDemands/{demandId} {
+      allow read: if request.auth != null && resource.data.userId == request.auth.uid;
+      allow write: if false; // Server-side only via Admin SDK
+    }
+
+    // ─── Item Suggestions ────────────────────────────
+    // Read: user can read suggestions they participated in
+    // Write: DENY — managed via /api/item-suggestions (Admin SDK)
+    match /itemSuggestions/{suggestionId} {
+      allow read: if request.auth != null && request.auth.uid in resource.data.requestedBy;
+      allow write: if false; // Server-side only via Admin SDK
+    }
+
+    // ─── User Feedbacks ─────────────────────────────
+    // Read: authenticated users can read their own general feedbacks
+    // Write: DENY — managed via /api/user-feedback (Admin SDK)
+    match /userFeedbacks/{feedbackId} {
+      allow read: if request.auth != null && resource.data.userId == request.auth.uid;
+      allow write: if false; // Server-side only via Admin SDK
+    }
 
     // ─── Catch-all ──────────────────────────────────
     // Deny everything else by default

@@ -135,3 +135,83 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "Failed to submit suggestion" }, { status: 500 });
     }
 }
+
+// ─── PATCH ──────────────────────────────────────
+export async function PATCH(req: NextRequest) {
+    const uid = await getAuthenticatedUser(req);
+    if (!uid) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+    const id = req.nextUrl.searchParams.get("id");
+    if (!id) return NextResponse.json({ error: "Suggestion id required" }, { status: 400 });
+
+    try {
+        const docRef = adminDb.collection("itemSuggestions").doc(id);
+        const docSnap = await docRef.get();
+
+        if (!docSnap.exists) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+        const data = docSnap.data()!;
+        // Only allow editing own suggestions
+        if (!data.requestedBy?.includes(uid)) {
+            return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+        }
+        // Only allow editing pending suggestions
+        if (data.status !== "pending") {
+            return NextResponse.json({ error: "Can only edit pending suggestions" }, { status: 400 });
+        }
+
+        const body = await req.json();
+        const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+
+        if (body.itemName !== undefined) {
+            if (typeof body.itemName !== "string" || body.itemName.trim().length < 2) {
+                return NextResponse.json({ error: "Item name min 2 characters" }, { status: 400 });
+            }
+            updates.itemName = body.itemName.trim();
+            updates.normalizedName = body.itemName.trim().toLowerCase();
+        }
+        if (body.category !== undefined) updates.category = typeof body.category === "string" ? body.category.trim() : "";
+        if (body.description !== undefined) updates.description = typeof body.description === "string" ? body.description.trim() : "";
+        if (body.expectedPrice !== undefined) {
+            updates.expectedPrice = typeof body.expectedPrice === "number" && body.expectedPrice > 0 ? body.expectedPrice : 0;
+        }
+
+        await docRef.update(updates);
+        console.log(`[ItemSuggestions] Updated suggestion ${id} by user ${uid}`);
+        return NextResponse.json({ success: true });
+    } catch (err) {
+        console.error("[ItemSuggestions] PATCH error:", err);
+        return NextResponse.json({ error: "Failed to update suggestion" }, { status: 500 });
+    }
+}
+
+// ─── DELETE ─────────────────────────────────────
+export async function DELETE(req: NextRequest) {
+    const uid = await getAuthenticatedUser(req);
+    if (!uid) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+    const id = req.nextUrl.searchParams.get("id");
+    if (!id) return NextResponse.json({ error: "Suggestion id required" }, { status: 400 });
+
+    try {
+        const docRef = adminDb.collection("itemSuggestions").doc(id);
+        const docSnap = await docRef.get();
+
+        if (!docSnap.exists) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+        const data = docSnap.data()!;
+        if (!data.requestedBy?.includes(uid)) {
+            return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+        }
+        if (data.status !== "pending") {
+            return NextResponse.json({ error: "Can only delete pending suggestions" }, { status: 400 });
+        }
+
+        await docRef.delete();
+        console.log(`[ItemSuggestions] Deleted suggestion ${id} by user ${uid}`);
+        return NextResponse.json({ success: true });
+    } catch (err) {
+        console.error("[ItemSuggestions] DELETE error:", err);
+        return NextResponse.json({ error: "Failed to delete suggestion" }, { status: 500 });
+    }
+}

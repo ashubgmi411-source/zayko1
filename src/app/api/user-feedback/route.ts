@@ -22,10 +22,11 @@ export async function GET(req: NextRequest) {
         const snap = await adminDb
             .collection("userFeedbacks")
             .where("userId", "==", uid)
-            .orderBy("createdAt", "desc")
             .get();
 
         const feedbacks = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        // Sort manually by createdAt desc
+        feedbacks.sort((a: any, b: any) => (b.createdAt || "").localeCompare(a.createdAt || ""));
         return NextResponse.json({ success: true, feedbacks });
     } catch (err) {
         console.error("[UserFeedback] GET error:", err);

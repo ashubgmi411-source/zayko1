@@ -3,7 +3,7 @@ import React, { useEffect, useState, useCallback } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { useRouter } from "next/navigation";
 import { db } from "@/lib/firebase";
-import { collection, onSnapshot, query } from "firebase/firestore";
+import { collection, onSnapshot, query, where } from "firebase/firestore";
 import toast from "react-hot-toast";
 import Link from "next/link";
 import { MenuItem } from "@/types";
@@ -16,6 +16,7 @@ interface DemandLocal {
     itemName: string;
     quantity: number;
     days: string[];
+    isActive: boolean;
 }
 
 export default function DailyNeedsPage() {
@@ -43,6 +44,7 @@ export default function DailyNeedsPage() {
         if (!loading && !user) router.push("/auth");
     }, [user, loading, router]);
 
+    // Menu items (real-time)
     useEffect(() => {
         const q = query(collection(db, "menuItems"));
         const unsub = onSnapshot(q, (snap) => {
@@ -51,19 +53,34 @@ export default function DailyNeedsPage() {
         return () => unsub();
     }, []);
 
-    const fetchDemands = useCallback(async () => {
-        const token = await getIdToken();
-        if (!token) return;
+    // Real-time demands via onSnapshot
+    useEffect(() => {
+        if (!user) return;
         setFetching(true);
-        try {
-            const res = await fetch("/api/daily-demands", { headers: { Authorization: `Bearer ${token}` } });
-            const json = await res.json();
-            if (json.success) setDemands(json.demands as DemandLocal[]);
-        } catch { toast.error("Failed to load demands"); }
-        setFetching(false);
-    }, [getIdToken]);
-
-    useEffect(() => { if (user) fetchDemands(); }, [user, fetchDemands]);
+        const q = query(
+            collection(db, "dailyDemands"),
+            where("userId", "==", user.uid)
+        );
+        const unsub = onSnapshot(
+            q,
+            (snap) => {
+                const items = snap.docs.map((d) => ({
+                    id: d.id,
+                    ...d.data(),
+                    isActive: d.data().isActive !== false, // default true for old docs
+                })) as DemandLocal[];
+                // Sort by createdAt descending in JS (avoids composite index)
+                items.sort((a: any, b: any) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+                setDemands(items);
+                setFetching(false);
+            },
+            (err) => {
+                console.error("[DailyNeeds] onSnapshot error:", err);
+                setFetching(false);
+            }
+        );
+        return () => unsub();
+    }, [user]);
 
     const toggleDay = (day: string) => {
         setDaily(false);
@@ -91,10 +108,40 @@ export default function DailyNeedsPage() {
             if (json.success) {
                 toast.success(json.action === "updated" ? "Demand updated! ✏️" : "Demand saved! 📋");
                 setSelectedItem(""); setQty(1); setSelectedDays([]); setDaily(false);
-                fetchDemands();
             } else toast.error(json.error || "Failed");
         } catch { toast.error("Something went wrong"); }
         setSaving(false);
+    };
+
+    const handleToggle = async (d: DemandLocal) => {
+        // Optimistic UI
+        setDemands((prev) => prev.map((item) =>
+            item.id === d.id ? { ...item, isActive: !item.isActive } : item
+        ));
+        const token = await getIdToken();
+        if (!token) return;
+        try {
+            const res = await fetch(`/api/daily-demands?id=${d.id}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ isActive: !d.isActive }),
+            });
+            const json = await res.json();
+            if (json.success) {
+                toast.success(d.isActive ? "Demand paused ⏸️" : "Demand activated ✅");
+            } else {
+                // Revert on failure
+                setDemands((prev) => prev.map((item) =>
+                    item.id === d.id ? { ...item, isActive: d.isActive } : item
+                ));
+                toast.error(json.error || "Failed to toggle");
+            }
+        } catch {
+            setDemands((prev) => prev.map((item) =>
+                item.id === d.id ? { ...item, isActive: d.isActive } : item
+            ));
+            toast.error("Failed to toggle");
+        }
     };
 
     const handleDelete = async (id: string) => {
@@ -104,7 +151,7 @@ export default function DailyNeedsPage() {
         try {
             const res = await fetch(`/api/daily-demands?id=${id}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
             const json = await res.json();
-            if (json.success) { toast.success("Removed 🗑️"); fetchDemands(); }
+            if (json.success) toast.success("Removed 🗑️");
         } catch { toast.error("Failed to delete"); }
     };
 
@@ -123,7 +170,7 @@ export default function DailyNeedsPage() {
                 body: JSON.stringify({ quantity: editQty, days: editDays }),
             });
             const json = await res.json();
-            if (json.success) { toast.success("Updated ✏️"); cancelEdit(); fetchDemands(); }
+            if (json.success) { toast.success("Updated ✏️"); cancelEdit(); }
             else toast.error(json.error || "Failed");
         } catch { toast.error("Something went wrong"); }
         setEditSaving(false);
@@ -220,10 +267,16 @@ export default function DailyNeedsPage() {
                     ) : (
                         <div className="space-y-3">
                             {demands.map((d) => (
-                                <div key={d.id} className="bg-zayko-800/50 border border-zayko-700 rounded-2xl p-4 animate-slide-up">
+                                <div
+                                    key={d.id}
+                                    className={`bg-zayko-800/50 border rounded-2xl p-4 transition-all animate-slide-up ${d.isActive ? "border-zayko-700" : "border-zayko-700/50 opacity-60"}`}
+                                >
                                     {editId === d.id ? (
                                         <div className="space-y-3">
-                                            <span className="text-white font-bold">{d.itemName}</span>
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-white font-bold">{d.itemName}</span>
+                                                <span className="text-xs text-zayko-500">editing</span>
+                                            </div>
                                             <div>
                                                 <label className="text-xs text-zayko-400 block mb-1">Quantity</label>
                                                 <input type="number" min={1} max={100} value={editQty}
@@ -256,9 +309,15 @@ export default function DailyNeedsPage() {
                                     ) : (
                                         <div className="flex items-center justify-between gap-4">
                                             <div className="min-w-0 flex-1">
-                                                <div className="flex items-center gap-2 mb-1">
+                                                <div className="flex items-center gap-2 mb-1 flex-wrap">
                                                     <span className="font-bold text-white truncate">{d.itemName}</span>
                                                     <span className="text-xs px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-400 font-semibold">×{d.quantity}</span>
+                                                    <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${d.isActive
+                                                        ? "bg-emerald-500/20 text-emerald-400"
+                                                        : "bg-zinc-500/20 text-zinc-400"
+                                                        }`}>
+                                                        {d.isActive ? "Active" : "Paused"}
+                                                    </span>
                                                 </div>
                                                 <div className="flex flex-wrap gap-1 mt-1">
                                                     {d.days.map((day) => (
@@ -267,6 +326,14 @@ export default function DailyNeedsPage() {
                                                 </div>
                                             </div>
                                             <div className="flex items-center gap-1.5 shrink-0">
+                                                {/* Toggle Switch */}
+                                                <button
+                                                    onClick={() => handleToggle(d)}
+                                                    className={`relative w-11 h-6 rounded-full transition-all ${d.isActive ? "bg-emerald-500" : "bg-zinc-600"}`}
+                                                    title={d.isActive ? "Pause demand" : "Activate demand"}
+                                                >
+                                                    <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${d.isActive ? "left-[22px]" : "left-0.5"}`}></span>
+                                                </button>
                                                 <button onClick={() => startEdit(d)} className="p-2 rounded-xl text-sm bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 transition-all" title="Edit">✏️</button>
                                                 <button onClick={() => handleDelete(d.id)} className="p-2 rounded-xl text-sm bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-all" title="Delete">🗑️</button>
                                             </div>
@@ -283,7 +350,7 @@ export default function DailyNeedsPage() {
                     <span className="text-xl">ℹ️</span>
                     <div>
                         <p className="text-blue-300 text-sm font-semibold">For demand forecasting only</p>
-                        <p className="text-blue-400/70 text-xs mt-0.5">No orders created. The canteen uses this to plan stock.</p>
+                        <p className="text-blue-400/70 text-xs mt-0.5">No orders created. The canteen uses this to plan stock. Toggle OFF to pause without deleting.</p>
                     </div>
                 </div>
             </div>

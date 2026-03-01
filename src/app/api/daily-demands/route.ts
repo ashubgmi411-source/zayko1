@@ -94,6 +94,7 @@ export async function POST(req: NextRequest) {
             itemName,
             quantity,
             days,
+            isActive: true,
             createdAt: now,
             updatedAt: now,
         };
@@ -131,6 +132,12 @@ export async function PATCH(req: NextRequest) {
                 return NextResponse.json({ error: "Quantity must be 1–100" }, { status: 400 });
             }
             updates.quantity = body.quantity;
+        }
+        if (body.isActive !== undefined) {
+            if (typeof body.isActive !== "boolean") {
+                return NextResponse.json({ error: "isActive must be a boolean" }, { status: 400 });
+            }
+            updates.isActive = body.isActive;
         }
         if (body.days !== undefined) {
             const invalidDays = body.days.filter((d: string) => !VALID_DAYS.includes(d));

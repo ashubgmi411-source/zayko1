@@ -29,6 +29,8 @@ export async function GET(req: NextRequest) {
 
         snap.forEach((doc) => {
             const d = doc.data();
+            // Skip inactive/paused demands
+            if (d.isActive === false) return;
             const userId: string = d.userId;
             const itemName: string = d.itemName || "Unknown";
             const quantity: number = d.quantity || 0;
