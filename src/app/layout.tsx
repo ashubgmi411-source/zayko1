@@ -7,6 +7,7 @@ import Footer from "@/components/Footer";
 import MobileBottomNav from "@/components/MobileBottomNav";
 import JarvisChat from "@/components/JarvisChat";
 import PageTransition from "@/components/PageTransition";
+import IntroProvider from "@/components/IntroProvider";
 import { Toaster } from "react-hot-toast";
 import Script from "next/script";
 
@@ -32,11 +33,13 @@ export default function RootLayout({
       <body className="min-h-screen flex flex-col">
         <AuthProvider>
           <CartProvider>
-            <Navbar />
-            <main className="flex-1"><PageTransition>{children}</PageTransition></main>
-            <Footer />
-            <MobileBottomNav />
-            <JarvisChat />
+            <IntroProvider>
+              <Navbar />
+              <main className="flex-1"><PageTransition>{children}</PageTransition></main>
+              <Footer />
+              <MobileBottomNav />
+              <JarvisChat />
+            </IntroProvider>
             <Toaster
               position="top-right"
               toastOptions={{
