@@ -30,13 +30,16 @@ export async function GET(req: NextRequest) {
         const snapshot = await adminDb
             .collection("scheduled_orders")
             .where("userId", "==", userId)
-            .orderBy("scheduledDateTime", "desc")
             .get();
 
-        const scheduledOrders = snapshot.docs.map((doc) => ({
-            id: doc.id,
-            ...doc.data(),
-        }));
+        const scheduledOrders = snapshot.docs
+            .map((doc) => ({
+                id: doc.id,
+                ...(doc.data() as any),
+            }))
+            .sort((a, b) => 
+                new Date(b.scheduledDateTime).getTime() - new Date(a.scheduledDateTime).getTime()
+            );
 
         return NextResponse.json({ success: true, scheduledOrders });
     } catch (error) {
