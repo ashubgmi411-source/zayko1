@@ -9,6 +9,7 @@ import { useCart } from "@/context/CartContext";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import JarvisChat from "@/components/JarvisChat";
+import ScheduledOrderModal from "@/components/ScheduledOrderModal";
 
 import { MenuItem, CategoryDoc } from "@/types";
 
@@ -30,6 +31,7 @@ export default function MenuPage() {
   const [canteenConfig, setCanteenConfig] = useState<CanteenConfig | null>(null);
   const [categories, setCategories] = useState<CategoryDoc[]>([]);
   const [cartPulse, setCartPulse] = useState(false);
+  const [showScheduleModal, setShowScheduleModal] = useState(false);
   const trendingRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -495,28 +497,46 @@ export default function MenuPage() {
             transition={{ type: "spring", stiffness: 300, damping: 28 }}
             className={`fixed bottom-20 md:bottom-4 left-3 right-3 sm:left-auto sm:right-6 sm:w-auto z-40 ${cartPulse ? 'neon-pulse' : ''}`}
           >
-            <Link
-              href="/cart"
-              className="flex items-center justify-between gap-4 sm:gap-6 bg-gradient-to-r from-gold-400 via-gold-500 to-gold-400 text-zayko-900 px-5 sm:px-6 py-3.5 sm:py-4 rounded-2xl shadow-[0_8px_32px_rgba(251,191,36,0.35)] hover:shadow-[0_16px_48px_rgba(251,191,36,0.5)] transition-all duration-300 active:scale-[0.97] group"
-            >
-              <div className="flex items-center gap-3">
-                <motion.span
-                  className="bg-zayko-900/20 w-9 h-9 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center text-base sm:text-lg"
-                  animate={cartPulse ? { rotate: [0, -10, 10, -5, 5, 0] } : {}}
-                  transition={{ duration: 0.4 }}
-                >
-                  🛒
-                </motion.span>
-                <div>
-                  <p className="font-bold text-sm sm:text-base">{itemCount} item{itemCount > 1 ? "s" : ""}</p>
-                  <p className="text-[10px] sm:text-xs text-zayko-900/60 group-hover:text-zayko-900/80 transition-colors">Tap to checkout →</p>
+            <div className="flex gap-2">
+              {/* Schedule Button */}
+              <button
+                onClick={() => setShowScheduleModal(true)}
+                className="flex items-center gap-2 bg-white/[0.08] backdrop-blur-xl border border-white/[0.12] text-white px-3.5 sm:px-4 py-3.5 sm:py-4 rounded-2xl hover:bg-white/[0.14] hover:border-gold-400/30 hover:shadow-[0_0_20px_rgba(251,191,36,0.12)] transition-all duration-300 active:scale-[0.97] group"
+              >
+                <span className="text-base sm:text-lg">🗓️</span>
+                <span className="text-[10px] sm:text-xs font-bold text-zayko-300 group-hover:text-gold-400 transition-colors hidden sm:inline">Schedule</span>
+              </button>
+
+              {/* Cart Button */}
+              <Link
+                href="/cart"
+                className="flex-1 flex items-center justify-between gap-4 sm:gap-6 bg-gradient-to-r from-gold-400 via-gold-500 to-gold-400 text-zayko-900 px-5 sm:px-6 py-3.5 sm:py-4 rounded-2xl shadow-[0_8px_32px_rgba(251,191,36,0.35)] hover:shadow-[0_16px_48px_rgba(251,191,36,0.5)] transition-all duration-300 active:scale-[0.97] group"
+              >
+                <div className="flex items-center gap-3">
+                  <motion.span
+                    className="bg-zayko-900/20 w-9 h-9 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center text-base sm:text-lg"
+                    animate={cartPulse ? { rotate: [0, -10, 10, -5, 5, 0] } : {}}
+                    transition={{ duration: 0.4 }}
+                  >
+                    🛒
+                  </motion.span>
+                  <div>
+                    <p className="font-bold text-sm sm:text-base">{itemCount} item{itemCount > 1 ? "s" : ""}</p>
+                    <p className="text-[10px] sm:text-xs text-zayko-900/60 group-hover:text-zayko-900/80 transition-colors">Tap to checkout →</p>
+                  </div>
                 </div>
-              </div>
-              <span className="font-display font-bold text-lg sm:text-xl">₹{total}</span>
-            </Link>
+                <span className="font-display font-bold text-lg sm:text-xl">₹{total}</span>
+              </Link>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Scheduled Order Modal */}
+      <ScheduledOrderModal
+        isOpen={showScheduleModal}
+        onClose={() => setShowScheduleModal(false)}
+      />
     </div>
   );
 }

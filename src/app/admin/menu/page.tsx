@@ -7,6 +7,7 @@ import { db } from "@/lib/firebase";
 import { collection, onSnapshot, query, orderBy } from "firebase/firestore";
 import toast from "react-hot-toast";
 import MenuImageUpload from "@/components/admin/MenuImageUpload";
+import MenuImageUploader from "@/components/admin/MenuImageUploader";
 import ParsedItemsPreview from "@/components/admin/ParsedItemsPreview";
 import MenuFilters, {
     type AvailabilityFilter,
@@ -513,6 +514,18 @@ export default function AdminMenuPage() {
                                         rows={2}
                                         className="w-full px-4 py-3 rounded-xl bg-zayko-700 border border-zayko-600 text-white placeholder:text-zayko-500 focus:ring-2 focus:ring-gold-400 focus:outline-none resize-none"
                                     />
+
+                                    {/* Image Upload (only when editing an existing item) */}
+                                    {editItem && (
+                                        <MenuImageUploader
+                                            menuItemId={editItem.id}
+                                            currentImage={editItem.image}
+                                            onUploadComplete={(url) => {
+                                                // Image is already saved to Firestore by the API
+                                                toast.success(`Image updated for ${editItem.name}`);
+                                            }}
+                                        />
+                                    )}
 
                                     {/* Customizations Section */}
                                     <div className="space-y-3 pt-2">

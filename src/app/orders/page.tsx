@@ -112,6 +112,12 @@ export default function OrdersPage() {
                         <h1 className="text-xl font-display font-bold text-white">My Orders 📋</h1>
                         <p className="text-xs text-zayko-400 mt-0.5">{orders.length} orders total</p>
                     </div>
+                    <Link
+                        href="/orders/scheduled"
+                        className="px-4 py-2 bg-blue-500/15 text-blue-400 border border-blue-500/20 rounded-xl text-xs font-bold hover:bg-blue-500/25 transition-all flex items-center gap-1.5"
+                    >
+                        🗓️ Scheduled
+                    </Link>
                 </div>
             </div>
 

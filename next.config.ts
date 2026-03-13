@@ -2,7 +2,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  serverExternalPackages: ["firebase-admin"],
+  serverExternalPackages: ["firebase-admin", "node-cron"],
   images: {
     remotePatterns: [
       {

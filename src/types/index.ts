@@ -233,3 +233,47 @@ export interface ItemSuggestion {
     createdAt: string;
     updatedAt: string;
 }
+
+// ─── Scheduled Orders (One-time Future Orders) ──
+
+export type ScheduledOrderStatus = "scheduled" | "completed" | "failed" | "cancelled";
+
+export interface ScheduledOrderItem {
+    itemId: string;
+    name: string;
+    quantity: number;
+    price: number;
+}
+
+export interface ScheduledOrder {
+    id: string;
+    userId: string;
+    items: ScheduledOrderItem[];
+    scheduledDateTime: string;          // ISO 8601
+    paymentMethod: "wallet" | "razorpay";
+    status: ScheduledOrderStatus;
+    failureReason?: string;
+    resultOrderId?: string;             // orderId in "orders" collection after execution
+    createdAt: string;
+    updatedAt: string;
+}
+
+// ─── AI Canteen Brain (Jarvis 2.0) ──────────────
+
+export interface CookingPlanItem {
+    itemId: string;
+    name: string;
+    predictedQuantity: number;
+    confidence?: "high" | "medium" | "low";
+}
+
+export interface DailyCookingPlan {
+    id?: string;
+    date: string;           // YYYY-MM-DD
+    items: CookingPlanItem[];
+    trendingItems: string[];
+    lowStockAlerts: { itemName: string; currentStock: number; unit: string }[];
+    purchaseRecommendations: { itemName: string; suggestedQty: number; unit: string; reason: string }[];
+    generatedAt: string;
+    provider: string;       // which AI provider generated this
+}
