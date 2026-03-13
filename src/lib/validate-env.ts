@@ -35,6 +35,9 @@ let validated = false;
 export function validateEnv(): void {
     if (validated) return;
 
+    // Skip validation during Next.js build phase (Railway injects env vars at runtime, not build time)
+    const isBuildPhase = process.env.NEXT_PHASE === "phase-production-build";
+
     const missing: string[] = [];
     const placeholder: string[] = [];
 
@@ -48,6 +51,13 @@ export function validateEnv(): void {
     }
 
     if (missing.length > 0) {
+        if (isBuildPhase) {
+            console.warn(
+                `[ENV] ⚠ Build phase: ${missing.length} env vars not yet available (will be injected at runtime).`
+            );
+            validated = true;
+            return;
+        }
         throw new Error(
             `[ENV] Missing required environment variables:\n${missing.map((k) => `  - ${k}`).join("\n")}\n\nCheck your .env.local file.`
         );
